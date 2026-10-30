@@ -46,19 +46,42 @@ class CursorDB:
         if not self.db_path.exists():
             raise FileNotFoundError(f"Database not found: {self.db_path}")
 
-        # Try to connect directly in read-only and lock-free mode for speed.
-        # Must validate real table reads: nolock can open the file but return an
-        # empty/unreadable WAL view (paths with spaces, or Cursor actively writing).
+        # Read in place. nolock is faster on macOS but some SQLite builds
+        # (notably Windows) reject it with "unable to open database file".
+        # mode=ro still sees the WAL and avoids copying multi-GB databases.
         if self.no_copy:
-            try:
-                db_uri = f"{self.db_path.resolve().as_uri()}?mode=ro&nolock=1"
-                conn = sqlite3.connect(db_uri, uri=True)
-                conn.execute("SELECT 1").fetchone()
-                self._probe_readable(conn)
-                self._conn = conn
-                return self._conn
-            except sqlite3.OperationalError:
-                pass
+            bases = [self.db_path.as_uri()]
+            resolved_uri = self.db_path.resolve().as_uri()
+            if resolved_uri not in bases:
+                bases.append(resolved_uri)
+            for base in bases:
+                for query in ("mode=ro&nolock=1", "mode=ro"):
+                    conn = None
+                    try:
+                        conn = sqlite3.connect(f"{base}?{query}", uri=True)
+                        conn.execute("SELECT 1").fetchone()
+                        self._probe_readable(conn)
+                        self._conn = conn
+                        return self._conn
+                    except sqlite3.OperationalError:
+                        if conn is not None:
+                            conn.close()
+
+        # Copy the main db file and any WAL/SHM files. Refuse when the copy
+        # would fill the disk; the caller can keep using a direct read instead.
+        bytes_needed = self.db_path.stat().st_size
+        for suffix in ("-wal", "-shm"):
+            sidecar = self.db_path.parent / (self.db_path.name + suffix)
+            if sidecar.exists():
+                bytes_needed += sidecar.stat().st_size
+        free = shutil.disk_usage(tempfile.gettempdir()).free
+        if free < bytes_needed + 512 * 1024 * 1024:
+            raise OSError(
+                f"Not enough free disk to copy {self.db_path} "
+                f"({bytes_needed / (1024 ** 3):.1f} GB needed, "
+                f"{free / (1024 ** 3):.1f} GB free). "
+                "Close other programs using the disk, or free space and retry."
+            )
 
         # Copy the main db file and any WAL/SHM files
         tmp_dir = tempfile.mkdtemp(prefix="cursaves-")
