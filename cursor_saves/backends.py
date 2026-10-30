@@ -381,6 +381,163 @@ class S3Backend(SyncBackend):
             return False
 
 
+# ── Google Cloud Storage backend ─────────────────────────────────────────
+
+
+def normalize_gcs_bucket(name: str) -> str:
+    """Accept ``my-bucket`` or ``gs://my-bucket`` and return the bucket name."""
+    cleaned = name.strip()
+    if cleaned.startswith("gs://"):
+        cleaned = cleaned[5:]
+    cleaned = cleaned.strip("/")
+    if not cleaned or "/" in cleaned:
+        raise ValueError(
+            f"Invalid GCS bucket {name!r}. Pass the bucket name only and use --prefix for the object prefix."
+        )
+    return cleaned
+
+
+class GCSBackend(SyncBackend):
+    """Sync snapshots to a Google Cloud Storage bucket.
+
+    Requires ``google-cloud-storage`` — install with ``cursaves[gcs]``.
+
+    Configuration (``%APPDATA%/cursaves/config.json`` on Windows,
+    ``~/.config/cursaves/config.json`` elsewhere)::
+
+        {
+            "backend": "gcs",
+            "gcs": {
+                "bucket": "my-cursor-saves",
+                "prefix": "snapshots/",
+                "project": "my-gcp-project"   // optional
+            }
+        }
+
+    Authentication uses Application Default Credentials
+    (``gcloud auth application-default login``).
+    """
+
+    def __init__(self, bucket: str, prefix: str = "snapshots/", project: Optional[str] = None):
+        self.bucket_name = normalize_gcs_bucket(bucket)
+        self.prefix = prefix.strip("/") + "/" if prefix.strip("/") else ""
+        self.project = project or None
+        self._bucket = None
+
+    def _get_bucket(self):
+        if self._bucket is None:
+            try:
+                from google.cloud import storage
+            except ImportError:
+                print(
+                    "Error: google-cloud-storage is required for the GCS backend.\n"
+                    "Install it with: uv tool install \"cursaves[gcs] @ git+https://github.com/adekzti/cursaves.git\"",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            kwargs = {}
+            if self.project:
+                kwargs["project"] = self.project
+            client = storage.Client(**kwargs)
+            self._bucket = client.bucket(self.bucket_name)
+        return self._bucket
+
+    def _print_gcs_error(self, action: str, exc: Exception) -> None:
+        text = str(exc)
+        hint = ""
+        if type(exc).__name__ == "DefaultCredentialsError" or "default credentials" in text.lower():
+            hint = "\n  Run: gcloud auth application-default login"
+        print(f"GCS {action} failed: {text}{hint}", file=sys.stderr)
+
+    def _remote_index(self, bucket) -> dict[str, tuple[float, int]]:
+        index: dict[str, tuple[float, int]] = {}
+        for blob in bucket.list_blobs(prefix=self.prefix):
+            rel = blob.name[len(self.prefix):]
+            if not rel or rel.endswith("/"):
+                continue
+            updated = getattr(blob, "updated", None)
+            remote_mtime = updated.timestamp() if updated is not None else 0.0
+            index[rel] = (remote_mtime, int(blob.size or 0))
+        return index
+
+    @staticmethod
+    def _same_object(local_path: Path, remote_mtime: float, remote_size: int, local_is_newer: bool) -> bool:
+        local_size = local_path.stat().st_size
+        local_mtime = local_path.stat().st_mtime
+        if local_size != remote_size:
+            return False
+        if local_is_newer:
+            return local_mtime >= remote_mtime
+        return local_mtime <= remote_mtime
+
+    # -- SyncBackend interface ------------------------------------------
+
+    def pull(self, snapshots_dir: Path) -> bool:
+        """Download remote snapshots that are missing or newer locally."""
+        try:
+            bucket = self._get_bucket()
+            downloaded = 0
+            for blob in bucket.list_blobs(prefix=self.prefix):
+                rel = blob.name[len(self.prefix):]
+                if not rel or rel.endswith("/"):
+                    continue
+                local_path = snapshots_dir / Path(rel)
+                updated = getattr(blob, "updated", None)
+                remote_mtime = updated.timestamp() if updated is not None else 0.0
+                remote_size = int(blob.size or 0)
+                if local_path.exists() and self._same_object(
+                    local_path, remote_mtime, remote_size, local_is_newer=True
+                ):
+                    continue
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                blob.download_to_filename(str(local_path))
+                if remote_mtime:
+                    os.utime(str(local_path), (remote_mtime, remote_mtime))
+                downloaded += 1
+            if downloaded:
+                print(f"  Downloaded {downloaded} file(s) from gs://{self.bucket_name}/{self.prefix}")
+            return True
+        except Exception as e:
+            self._print_gcs_error("pull", e)
+            return False
+
+    def push(self, snapshots_dir: Path) -> bool:
+        """Upload local snapshots that are missing or newer on the bucket."""
+        try:
+            bucket = self._get_bucket()
+            remote_index = self._remote_index(bucket)
+            uploaded = 0
+            if not snapshots_dir.exists():
+                return True
+            for local_path in snapshots_dir.rglob("*"):
+                if not local_path.is_file():
+                    continue
+                rel = local_path.relative_to(snapshots_dir).as_posix()
+                if rel in remote_index:
+                    remote_mtime, remote_size = remote_index[rel]
+                    if self._same_object(local_path, remote_mtime, remote_size, local_is_newer=False):
+                        continue
+                blob = bucket.blob(self.prefix + rel)
+                blob.upload_from_filename(str(local_path))
+                uploaded += 1
+            if uploaded:
+                print(f"  Uploaded {uploaded} file(s) to gs://{self.bucket_name}/{self.prefix}")
+            return True
+        except Exception as e:
+            self._print_gcs_error("push", e)
+            return False
+
+    def has_remote(self) -> bool:
+        return True
+
+    def is_initialized(self) -> bool:
+        try:
+            return bool(self._get_bucket().exists())
+        except Exception as e:
+            self._print_gcs_error("bucket check", e)
+            return False
+
+
 # ── Configuration ────────────────────────────────────────────────────────
 
 
@@ -421,6 +578,19 @@ def get_backend() -> SyncBackend:
             bucket=bucket,
             prefix=s3_cfg.get("prefix", "snapshots/"),
             region=s3_cfg.get("region"),
+        )
+
+    if backend_type == "gcs":
+        gcs_cfg = config.get("gcs", {})
+        bucket = gcs_cfg.get("bucket")
+        if not bucket:
+            print("Error: GCS backend configured but no bucket specified.", file=sys.stderr)
+            print("Run: cursaves init --backend gcs --bucket <name>", file=sys.stderr)
+            sys.exit(1)
+        return GCSBackend(
+            bucket=bucket,
+            prefix=gcs_cfg.get("prefix", "snapshots/"),
+            project=gcs_cfg.get("project"),
         )
 
     # Default: git

@@ -52,13 +52,17 @@ This means you can sync chats for the same repo across different machines, even 
 
 ```bash
 # Install globally (once per machine)
-uv tool install git+https://github.com/Callum-Ward/cursaves.git
+uv tool install git+https://github.com/adekzti/cursaves.git
 
 # Initialize with a git remote (once per machine)
 cursaves init --remote git@github.com:you/my-cursaves.git
 
 # Or with an S3 bucket
 cursaves init --backend s3 --bucket my-cursor-saves
+
+# Or with a Google Cloud Storage bucket
+uv tool install "cursaves[gcs] @ git+https://github.com/adekzti/cursaves.git"
+cursaves init --backend gcs --bucket my-cursor-saves --project my-gcp-project
 ```
 
 Then from any project directory:
@@ -129,10 +133,13 @@ cadfb263-3326-4aff-8887-dcc12f736b11     Feedback on documentation...   agent   
 
 ```bash
 # Standard install (git backend only)
-uv tool install git+https://github.com/Callum-Ward/cursaves.git
+uv tool install git+https://github.com/adekzti/cursaves.git
 
 # With S3 support
-uv tool install "cursaves[s3] @ git+https://github.com/Callum-Ward/cursaves.git"
+uv tool install "cursaves[s3] @ git+https://github.com/adekzti/cursaves.git"
+
+# With Google Cloud Storage support
+uv tool install "cursaves[gcs] @ git+https://github.com/adekzti/cursaves.git"
 ```
 
 This puts `cursaves` on your PATH so you can run it from any directory. Run this on each machine you want to sync between.
@@ -159,7 +166,7 @@ python -m cursor_saves <command>
 
 ## Setup
 
-`cursaves` stores conversation snapshots locally at `~/.cursaves/snapshots/`. To sync between machines, you configure a **backend** — either a git remote or an S3 bucket.
+`cursaves` stores conversation snapshots locally at `~/.cursaves/snapshots/`. To sync between machines, you configure a **backend** — a git remote, an S3 bucket, or a Google Cloud Storage bucket.
 
 ### Option A: Git backend (default)
 
@@ -179,11 +186,24 @@ This creates `~/.cursaves/` with a git repo and the remote configured. If you on
 3. Install with S3 support and initialize:
 
 ```bash
-uv tool install "cursaves[s3] @ git+https://github.com/Callum-Ward/cursaves.git"
+uv tool install "cursaves[s3] @ git+https://github.com/adekzti/cursaves.git"
 cursaves init --backend s3 --bucket my-cursor-saves --region us-east-1
 ```
 
 S3 avoids git history overhead and works well for large snapshot sets. Authentication uses the standard AWS credential chain.
+
+### Option C: Google Cloud Storage backend
+
+1. Create a **private** Cloud Storage bucket.
+2. Log in with Application Default Credentials: `gcloud auth application-default login`.
+3. Install with GCS support and initialize:
+
+```bash
+uv tool install "cursaves[gcs] @ git+https://github.com/adekzti/cursaves.git"
+cursaves init --backend gcs --bucket my-cursor-saves --project my-gcp-project
+```
+
+`--project` is optional and defaults to the active `gcloud` project. Authentication uses Application Default Credentials, so no AWS key and no HMAC key are required. Object paths use the prefix `snapshots/` unless you pass `--prefix`.
 
 ### Start syncing
 
@@ -214,7 +234,7 @@ All commands default to the current working directory as the project path. Use `
 | **`push -s`**       | **Interactively select which conversations to push**          | No                    |
 | **`pull`**          | **Pull + import snapshots for current project**               | Yes                   |
 | **`pull -g`**       | **Pull + import snapshots across all workspaces**             | Yes                   |
-| `init`              | Initialize sync (git remote, S3 bucket, etc.)                 | No                    |
+| `init`              | Initialize sync (git remote, S3 or GCS bucket)                | No                    |
 | `workspaces`        | List all Cursor workspaces (local, SSH, custom) with hash     | No                    |
 | `list`              | Show conversations for a project                              | No                    |
 | `snapshots`         | List snapshot projects available in ~/.cursaves/              | No                    |
@@ -401,7 +421,7 @@ The daemon handles checkpoint + git push/pull automatically. When you switch mac
   .git/                        # Present when using git backend
 
 ~/.config/cursaves/
-  config.json                  # Backend configuration (git, s3, etc.)
+  config.json                  # Backend configuration (git, s3, gcs)
   sync_state.json              # Tracks handled diverged snapshots
 
 ~/.local/bin/cursaves          # Global CLI tool (installed via uv)
@@ -413,7 +433,9 @@ cursaves/                      # Source repo (this repo, public)
   LICENSE
 ```
 
-The tool code (this repo) is separate from your conversation data (`~/.cursaves/`). Install the tool once, point it at a private remote (git or S3), and sync from any project directory.
+The tool code (this repo) is separate from your conversation data (`~/.cursaves/`). Install the tool once, point it at a private remote (git, S3, or GCS), and sync from any project directory.
+
+This fork tracks the Windows-capable branch of [Callum-Ward/cursaves](https://github.com/Callum-Ward/cursaves) and adds a Google Cloud Storage backend.
 
 ## Contributing
 

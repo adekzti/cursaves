@@ -478,7 +478,7 @@ def is_sync_repo_initialized() -> bool:
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text())
-            return cfg.get("backend") in ("s3", "azure")
+            return cfg.get("backend") in ("s3", "gcs", "azure")
         except Exception:
             pass
     return False

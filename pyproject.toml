@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cursaves"
-version = "0.9.2"
+version = "0.10.0"
 description = "Sync Cursor agent chat sessions between machines"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -13,6 +13,7 @@ dependencies = ["InquirerPy>=0.3.4"]
 
 [project.optional-dependencies]
 s3 = ["boto3"]
+gcs = ["google-cloud-storage>=2.18"]
 
 [project.scripts]
 cursaves = "cursor_saves.cli:main"
@@ -21,4 +22,4 @@ cursaves = "cursor_saves.cli:main"
 packages = ["cursor_saves"]
 
 [project.urls]
-Repository = "https://github.com/Callum-Ward/cursaves"
+Repository = "https://github.com/adekzti/cursaves"
