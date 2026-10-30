@@ -68,12 +68,28 @@ def get_cursor_projects_dir() -> Path:
 
 
 def sanitize_project_path(project_path: str) -> str:
-    """Convert a project path to Cursor's sanitized directory name format.
+    """Convert a project path to Cursor's project-directory slug.
 
     /Users/callum/Desktop/Projects/myrepo -> Users-callum-Desktop-Projects-myrepo
+    C:\\Programacao\\cursaves -> C-Programacao-cursaves
+    W:\\home\\thiago\\dev\\app\\workspace.code-workspace ->
+        W-home-thiago-dev-app-workspace-code-workspace
+
+    The colon in a Windows drive is removed. Keeping it produces a name like
+    ``W:-home-...``, which pathlib treats as a path on drive W:. Looking that
+    up raises WinError 995 when the drive does not answer, and aborts the push.
     """
-    # Strip leading slash/backslash and replace path separators with -
-    return project_path.strip("/\\").replace("/", "-").replace("\\", "-")
+    slug: list[str] = []
+    pending_dash = False
+    for ch in project_path.replace(":", ""):
+        if ch.isalnum():
+            if pending_dash and slug:
+                slug.append("-")
+            slug.append(ch)
+            pending_dash = False
+        else:
+            pending_dash = True
+    return "".join(slug)
 
 
 def _decode_ssh_host(host: str) -> str:
@@ -160,15 +176,30 @@ def find_workspace_dirs_for_project(project_path: str) -> list[Path]:
     return matches
 
 
+def _path_exists(path: Path) -> bool:
+    """Return whether path exists. Missing drives and aborted I/O count as no."""
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def find_transcript_dir(project_path: str) -> Optional[Path]:
     """Find the agent-transcripts directory for a project."""
     projects_dir = get_cursor_projects_dir()
-    if not projects_dir.exists():
+    if not _path_exists(projects_dir):
         return None
 
     sanitized = sanitize_project_path(project_path)
+    if not sanitized or ":" in sanitized:
+        return None
     transcript_dir = projects_dir / sanitized / "agent-transcripts"
-    if transcript_dir.exists():
+    try:
+        if transcript_dir.drive and projects_dir.drive and transcript_dir.drive != projects_dir.drive:
+            return None
+    except (OSError, ValueError):
+        return None
+    if _path_exists(transcript_dir):
         return transcript_dir
 
     return None

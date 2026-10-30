@@ -212,13 +212,12 @@ def get_transcript(project_path: str, composer_id: str) -> Optional[str]:
         return None
 
     transcript_file = transcript_dir / f"{composer_id}.txt"
-    if transcript_file.exists():
-        try:
-            return transcript_file.read_text()
-        except OSError:
+    try:
+        if not transcript_file.exists():
             return None
-
-    return None
+        return transcript_file.read_text()
+    except OSError:
+        return None
 
 
 def format_timestamp(ts_ms: int) -> str:
