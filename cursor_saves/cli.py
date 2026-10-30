@@ -752,20 +752,14 @@ def _export_and_push(sync_dir: Path, items: list[dict], backend: Optional[SyncBa
             source_host=host or None,
         )
         total_saved += len(saved)
-
-    if total_saved == 0:
-        return 0
-
-    if backend is None:
-        backend = get_backend()
-
-    snapshots_dir = paths.get_snapshots_dir()
-    if backend.has_remote():
-        print("  Pushing...", end="", flush=True)
-        if backend.push(snapshots_dir):
-            print(" done")
-        else:
-            print(" failed", file=sys.stderr)
+        if saved and backend is not None and backend.has_remote():
+            # Upload after each workspace so a long backup reaches the bucket
+            # before every chat has been exported.
+            print("  Pushing...", end="", flush=True)
+            if backend.push(paths.get_snapshots_dir()):
+                print(" done")
+            else:
+                print(" failed", file=sys.stderr)
 
     return total_saved
 
