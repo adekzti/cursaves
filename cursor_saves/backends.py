@@ -438,6 +438,15 @@ class GCSBackend(SyncBackend):
             kwargs = {}
             if self.project:
                 kwargs["project"] = self.project
+                try:
+                    import google.auth
+
+                    credentials, _ = google.auth.default()
+                    if hasattr(credentials, "with_quota_project"):
+                        credentials = credentials.with_quota_project(self.project)
+                    kwargs["credentials"] = credentials
+                except Exception:
+                    pass
             client = storage.Client(**kwargs)
             self._bucket = client.bucket(self.bucket_name)
         return self._bucket
