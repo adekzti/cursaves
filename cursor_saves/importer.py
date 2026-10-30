@@ -444,13 +444,10 @@ def import_snapshot(
             f"            Importing as separate chat: \"{new_name}\""
         )
 
-    # ── Step 1: Backup global DB ────────────────────────────────────
-    if not skip_backup and global_db_path.exists():
-        backup_path = db.backup_db(global_db_path)
-        if backup_path:
-            print(f"  Backed up global DB to {backup_path.name}")
+    # The global DB is tens of GB. Do not duplicate it. Each write is a transaction,
+    # and the snapshot files are the copy of the chats.
 
-    # ── Step 2: Write conversation data to global DB ────────────────
+    # ── Write conversation data to global DB ────────────────────────
     global_cdb = db.CursorDB(global_db_path)
     try:
         with global_cdb.transaction():
@@ -779,13 +776,6 @@ def import_from_snapshot_dir(
     snapshot_files = list_snapshot_files(snapshot_dir)
     if not snapshot_files:
         return 0, 0
-
-    # Back up DBs once for the entire batch (global DB can be multi-GB)
-    global_db_path = paths.get_global_db_path()
-    if global_db_path.exists():
-        backup_path = db.backup_db(global_db_path)
-        if backup_path:
-            print(f"Backed up global DB to {backup_path.name}")
 
     if target_workspace_dir is not None:
         ws_dir = target_workspace_dir
@@ -1264,10 +1254,6 @@ def repair_missing_blobs(verbose: bool = False) -> tuple[int, int]:
         return 0, 0
 
     # Phase 3: Write restored blobs to the global DB
-    backup_path = db.backup_db(global_db_path)
-    if verbose and backup_path:
-        print(f"  Backed up global DB to {backup_path.name}")
-
     with db.CursorDB(global_db_path) as cdb:
         cdb.write_batch([
             (f"agentKv:blob:{bid}", val)
@@ -1686,10 +1672,6 @@ def migrate_to_global_headers(
               f"({already_present} already present).")
         return len(final_entries), already_present
 
-    backup_path = db.backup_db(global_db_path)
-    if backup_path:
-        print(f"Backed up global DB to {backup_path.name}")
-
     headers["allComposers"].extend(final_entries)
     write_cdb = db.CursorDB(global_db_path)
     try:
@@ -1831,10 +1813,6 @@ def purge_chats(
     global_db_path = paths.get_global_db_path()
     if not global_db_path.exists():
         return 0, 0
-
-    backup_path = db.backup_db(global_db_path)
-    if backup_path:
-        print(f"  Backed up global DB to {backup_path.name}")
 
     cid_set = set(composer_ids)
     total_keys = 0

@@ -916,7 +916,6 @@ def _pull_behind(
     handled = sync_state.get("handled_diverged", {})
 
     total_imported = 0
-    backed_up_global = False
     backed_up_ws: set[str] = set()
 
     try:
@@ -983,10 +982,6 @@ def _pull_behind(
                     target_list = all_matches[:1]
 
                 for ws in target_list:
-                    if not backed_up_global and global_db_path.exists():
-                        db.backup_db(global_db_path)
-                        backed_up_global = True
-
                     ws_dir_str = str(ws["workspace_dir"])
                     if ws_dir_str not in backed_up_ws:
                         ws_db_path = ws["workspace_dir"] / "state.vscdb"
