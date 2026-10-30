@@ -3,6 +3,7 @@
 import json
 import shutil
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 from contextlib import contextmanager
@@ -415,20 +416,52 @@ class CursorDB:
 
 
 
-def backup_db(db_path: Path, keep: int = 2) -> Path:
+def backup_db(db_path: Path, keep: int = 2) -> Optional[Path]:
     """Create a timestamped backup of a database file.
 
     Keeps only the most recent `keep` backups (default 2) and deletes
     older ones to prevent unbounded disk usage. The global DB can be
     multi-GB, so even a handful of stale backups can fill a disk.
 
-    Returns the path to the new backup.
+    Returns the path to the new backup, or None when the volume beside the
+    database cannot hold a second full copy. Callers continue without it.
     """
     from datetime import datetime
 
+    needed = db_path.stat().st_size
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path.parent / (db_path.name + suffix)
+        if sidecar.exists():
+            needed += sidecar.stat().st_size
+    margin = 512 * 1024 * 1024
+    try:
+        free = shutil.disk_usage(db_path.parent).free
+    except OSError:
+        free = 0
+    if free < needed + margin:
+        print(
+            f"Warning: {db_path.name} is {needed / (1024 ** 3):.1f} GB and the disk "
+            f"beside it has {free / (1024 ** 3):.1f} GB free. "
+            "Skipping the full-file copy and continuing.",
+            file=sys.stderr,
+        )
+        return None
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = db_path.parent / f"{db_path.stem}.backup_{timestamp}{db_path.suffix}"
-    shutil.copy2(db_path, backup_path)
+    try:
+        shutil.copy2(db_path, backup_path)
+    except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
+        if winerror == 112 or exc.errno == 28:
+            backup_path.unlink(missing_ok=True)
+            print(
+                f"Warning: copy of {db_path.name} ran out of disk. "
+                "Skipping the full-file copy and continuing.",
+                file=sys.stderr,
+            )
+            return None
+        raise
 
     for suffix in ("-wal", "-shm"):
         wal = db_path.parent / (db_path.name + suffix)
