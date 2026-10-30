@@ -9,6 +9,18 @@ from contextlib import contextmanager
 from typing import Any, Optional
 
 
+def _prefix_range(prefix: str) -> tuple[str, str]:
+    """Return ``[start, end)`` bounds for a key prefix.
+
+    SQLite ``LIKE 'prefix%'`` is case-insensitive and does not use the primary
+    key index, so it full-scans Cursor's multi-GB database. A range comparison
+    does use the index.
+    """
+    if not prefix:
+        return "", "\uffff"
+    return prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)
+
+
 class CursorDB:
     """Safe interface to a Cursor state.vscdb database.
 
@@ -183,9 +195,16 @@ class CursorDB:
         conn = self._ensure_read_copy()
         try:
             if prefix:
-                rows = conn.execute(
-                    f"SELECT key FROM {table} WHERE key LIKE ?", (prefix + "%",)
-                ).fetchall()
+                cache = self.__dict__.setdefault("_prefix_key_cache", {})
+                cache_key = (table, prefix)
+                if cache_key not in cache:
+                    start, end = _prefix_range(prefix)
+                    rows = conn.execute(
+                        f"SELECT key FROM {table} WHERE key >= ? AND key < ?",
+                        (start, end),
+                    ).fetchall()
+                    cache[cache_key] = [r[0] for r in rows]
+                return list(cache[cache_key])
             else:
                 rows = conn.execute(f"SELECT key FROM {table}").fetchall()
             return [r[0] for r in rows]
@@ -206,12 +225,13 @@ class CursorDB:
         result: dict[str, int] = {}
         try:
             prefix = key_type + ":"
+            start, end = _prefix_range(prefix)
             rows = conn.execute(
                 f"""SELECT SUBSTR(key, {len(prefix) + 1}, 36) AS cid, COUNT(*)
                     FROM {table}
-                    WHERE key LIKE ?
+                    WHERE key >= ? AND key < ?
                     GROUP BY cid""",
-                (prefix + "%",),
+                (start, end),
             ).fetchall()
             for cid, count in rows:
                 if cid and len(cid) == 36:
@@ -234,8 +254,10 @@ class CursorDB:
         """Get all key-value pairs matching a prefix as strings."""
         conn = self._ensure_read_copy()
         try:
+            start, end = _prefix_range(prefix)
             rows = conn.execute(
-                f"SELECT key, value FROM {table} WHERE key LIKE ?", (prefix + "%",)
+                f"SELECT key, value FROM {table} WHERE key >= ? AND key < ?",
+                (start, end),
             ).fetchall()
             result = {}
             for k, v in rows:
@@ -251,8 +273,10 @@ class CursorDB:
         """Get all key-value pairs matching a prefix and parse values as JSON."""
         conn = self._ensure_read_copy()
         try:
+            start, end = _prefix_range(prefix)
             rows = conn.execute(
-                f"SELECT key, value FROM {table} WHERE key LIKE ?", (prefix + "%",)
+                f"SELECT key, value FROM {table} WHERE key >= ? AND key < ?",
+                (start, end),
             ).fetchall()
             result = {}
             for k, v in rows:

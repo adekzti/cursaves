@@ -437,14 +437,17 @@ def export_conversation(
                 bubble_id = key[len(bubble_prefix):]
                 bubbles[bubble_id] = val
 
-        # Content blobs referenced by this conversation
+        # Content blobs referenced by this conversation. List keys once
+        # (cached) and fetch only the hashes this chat actually mentions.
         conv_json = json.dumps(conv_data)
         blobs = {}
-        content_items = _cdb.get_items_by_prefix("composer.content.")
-        for key, val in content_items.items():
-            content_hash = key[len("composer.content."):]
-            if content_hash in conv_json:
-                blobs[content_hash] = val
+        content_prefix = "composer.content."
+        for key in _cdb.list_keys(content_prefix):
+            content_hash = key[len(content_prefix):]
+            if content_hash and content_hash in conv_json:
+                val = _cdb.get_item(key)
+                if val is not None:
+                    blobs[content_hash] = val
 
         # Message request contexts
         contexts = {}
